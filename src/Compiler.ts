@@ -75,7 +75,19 @@ export function compileFilesWithOptions(fileNames: string[], options: CompilerOp
 
     emitFilesAndReportErrors(program);
 }
-
+interface LineMapEntry {
+    sourceStart: number;
+    sourceEnd: number;
+    destinationStart: number;
+    destinationEnd: number;
+}
+function generateLineMapFile(entries: LineMapEntry[]): string {
+    let ret = "";
+    for (const e of entries) {
+        ret += `${e.sourceStart}; ${e.sourceEnd}; ${e.destinationStart}; ${e.destinationEnd}\n`;
+    }
+    return ret;
+}
 function emitFilesAndReportErrors(program: ts.Program): number {
     const options = program.getCompilerOptions() as CompilerOptions;
 
@@ -101,8 +113,9 @@ function emitFilesAndReportErrors(program: ts.Program): number {
                 const rootDir = options.rootDir;
 
                 // Transpile AST
-                const lua = createTranspiler(checker, options, sourceFile).transpileSourceFile();
-
+                const transpiler = createTranspiler(checker, options, sourceFile);
+                const lua = transpiler.transpileSourceFile();
+                const sourceMap = generateLineMapFile(transpiler.sourceMap);
                 let outPath = sourceFile.fileName;
                 if (options.outDir !== options.rootDir) {
                     const relativeSourcePath = path.resolve(sourceFile.fileName)
@@ -122,9 +135,12 @@ function emitFilesAndReportErrors(program: ts.Program): number {
                     const fileNameLua = path.basename(outPath, path.extname(outPath)) + ".lua";
                     outPath = path.join(path.dirname(outPath), fileNameLua);
                 }
-
+                const fileMapPath = path.basename(outPath) + ".map";
                 // Write output
                 ts.sys.writeFile(outPath, lua);
+                if (options.sourceMap) {
+                    ts.sys.writeFile(fileMapPath, sourceMap);
+                }
             } catch (exception) {
                 /* istanbul ignore else: Testing else part would require to add a bug/exception to our code */
                 if (exception.node) {

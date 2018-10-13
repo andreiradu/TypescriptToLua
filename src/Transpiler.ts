@@ -53,7 +53,12 @@ interface ExportInfo {
     node: ts.Node;
     dummy: boolean;
 }
-
+interface SourceMapSegment {
+    sourceStart: number;
+    sourceEnd: number;
+    destinationStart: number;
+    destinationEnd: number;
+}
 export abstract class LuaTranspiler {
     // Lua key words for this Lua target
     // https://www.lua.org/manual/5.0/manual.html#2.1
@@ -75,7 +80,8 @@ export abstract class LuaTranspiler {
     public loopStack: number[];
     public classStack: string[];
     public exportStack: ExportInfo[][];
-
+    public sourceMap: SourceMapSegment[];
+    public outPositionStack: number[];
     public luaLibFeatureSet: Set<LuaLibFeature>;
 
     constructor(checker: ts.TypeChecker, options: CompilerOptions, sourceFile: ts.SourceFile) {
@@ -91,6 +97,8 @@ export abstract class LuaTranspiler {
         this.loopStack = [];
         this.classStack = [];
         this.exportStack = [];
+        this.sourceMap = [];
+        this.outPositionStack = [0];
         this.luaLibFeatureSet = new Set<LuaLibFeature>();
 
         if (!this.options.luaTarget) {
@@ -115,6 +123,19 @@ export abstract class LuaTranspiler {
             "local " : "";
     }
 
+    public beginNodeTranspilation(node: ts.Node): SourceMapSegment {
+        const destinationPos = this.outPositionStack[this.outPositionStack.length - 1];
+        const entry = { destinationEnd: -1, destinationStart: destinationPos,
+                        sourceEnd: node.end, sourceStart: node.pos };
+        this.outPositionStack.push(this.outPositionStack[this.outPositionStack.length - 1]);
+        this.sourceMap.push(entry);
+        return entry;
+    }
+    public endNodeTranspilation(entry: SourceMapSegment, node: ts.Node, destinationCode: string): void {
+        this.outPositionStack.pop();
+        this.outPositionStack[this.outPositionStack.length - 1] += destinationCode.length;
+        entry.destinationEnd = this.outPositionStack[this.outPositionStack.length - 1];
+    }
     public pushExport(nameIn: string, nodeIn: ts.Node, dummyIn: boolean = false): void {
         this.exportStack[this.exportStack.length - 1].push({name: nameIn, node: nodeIn, dummy: dummyIn});
     }
@@ -217,7 +238,11 @@ export abstract class LuaTranspiler {
             // Shadow exports if it already exists
             result += "local exports = exports or {}\n";
         }
-
+        // patch source maps
+        for (const m of this.sourceMap) {
+            m.destinationStart += result.length;
+            m.destinationEnd += result.length;
+        }
         // Add file systems after imports since order matters in Lua
         result += fileStatements;
 
@@ -255,56 +280,78 @@ export abstract class LuaTranspiler {
         if (node.modifiers && node.modifiers.some(modifier => modifier.kind === ts.SyntaxKind.DeclareKeyword)) {
             return "";
         }
-
+        const lm = this.beginNodeTranspilation(node);
+        let ret = "";
         switch (node.kind) {
             case ts.SyntaxKind.ImportDeclaration:
-                return this.transpileImport(node as ts.ImportDeclaration);
+                ret = this.transpileImport(node as ts.ImportDeclaration);
+                break;
             case ts.SyntaxKind.ClassDeclaration:
-                return this.transpileClass(node as ts.ClassDeclaration);
+                ret = this.transpileClass(node as ts.ClassDeclaration);
+                break;
             case ts.SyntaxKind.ModuleDeclaration:
-                return this.transpileNamespace(node as ts.ModuleDeclaration);
+                ret = this.transpileNamespace(node as ts.ModuleDeclaration);
+                break;
             case ts.SyntaxKind.ModuleBlock:
-                return this.transpileBlock(node as ts.Block);
+                ret = this.transpileBlock(node as ts.Block);
+                break;
             case ts.SyntaxKind.EnumDeclaration:
-                return this.transpileEnum(node as ts.EnumDeclaration);
+                ret = this.transpileEnum(node as ts.EnumDeclaration);
+                break;
             case ts.SyntaxKind.FunctionDeclaration:
-                return this.transpileFunctionDeclaration(node as ts.FunctionDeclaration);
+                ret = this.transpileFunctionDeclaration(node as ts.FunctionDeclaration);
+                break;
             case ts.SyntaxKind.VariableStatement:
-                return this.indent + this.transpileVariableStatement(node as ts.VariableStatement);
+                ret = this.indent + this.transpileVariableStatement(node as ts.VariableStatement);
+                break;
             case ts.SyntaxKind.ExpressionStatement:
-                return this.indent + this.transpileExpression((node as ts.ExpressionStatement).expression) + ";\n";
+                ret = this.indent + this.transpileExpression((node as ts.ExpressionStatement).expression) + ";\n";
+                break;
             case ts.SyntaxKind.ReturnStatement:
-                return this.indent + this.transpileReturn(node as ts.ReturnStatement) + "\n";
+                ret = this.indent + this.transpileReturn(node as ts.ReturnStatement) + "\n";
+                break;
             case ts.SyntaxKind.IfStatement:
-                return this.transpileIf(node as ts.IfStatement);
+                ret = this.transpileIf(node as ts.IfStatement);
+                break;
             case ts.SyntaxKind.WhileStatement:
-                return this.transpileWhile(node as ts.WhileStatement);
+                ret = this.transpileWhile(node as ts.WhileStatement);
+                break;
             case ts.SyntaxKind.DoStatement:
-                return this.transpileDoStatement(node as ts.DoStatement);
+                ret = this.transpileDoStatement(node as ts.DoStatement);
+                break;
             case ts.SyntaxKind.ForStatement:
-                return this.transpileFor(node as ts.ForStatement);
+                ret = this.transpileFor(node as ts.ForStatement);
+                break;
             case ts.SyntaxKind.ForOfStatement:
-                return this.transpileForOf(node as ts.ForOfStatement);
+                ret = this.transpileForOf(node as ts.ForOfStatement);
+                break;
             case ts.SyntaxKind.ForInStatement:
-                return this.transpileForIn(node as ts.ForInStatement);
+                ret = this.transpileForIn(node as ts.ForInStatement);
+                break;
             case ts.SyntaxKind.SwitchStatement:
-                return this.transpileSwitch(node as ts.SwitchStatement);
+                ret = this.transpileSwitch(node as ts.SwitchStatement);
+                break;
             case ts.SyntaxKind.BreakStatement:
-                return this.transpileBreak();
+                ret = this.transpileBreak();
+                break;
             case ts.SyntaxKind.TryStatement:
-                return this.transpileTry(node as ts.TryStatement);
+                ret = this.transpileTry(node as ts.TryStatement);
+                break;
             case ts.SyntaxKind.ThrowStatement:
-                return this.transpileThrow(node as ts.ThrowStatement);
+                ret = this.transpileThrow(node as ts.ThrowStatement);
+                break;
             case ts.SyntaxKind.ContinueStatement:
-                return this.transpileContinue(node as ts.ContinueStatement);
+                ret = this.transpileContinue(node as ts.ContinueStatement);
+                break;
             case ts.SyntaxKind.TypeAliasDeclaration:
             case ts.SyntaxKind.InterfaceDeclaration:
             case ts.SyntaxKind.EndOfFileToken:
-                // Ignore these
-                return "";
+                break;
             default:
-                return this.indent + this.transpileExpression(node) + "\n";
+                ret = this.indent + this.transpileExpression(node) + "\n";
         }
+        this.endNodeTranspilation(lm, node, ret);
+        return ret;
     }
 
     public transpileLuaLibFunction(func: LuaLibFeature, ...params: string[]): string {
