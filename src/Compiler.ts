@@ -81,10 +81,55 @@ interface LineMapEntry {
     destinationStart: number;
     destinationEnd: number;
 }
-function generateLineMapFile(entries: LineMapEntry[]): string {
-    let ret = "";
+// function generateLineMapFile(entries: LineMapEntry[], sourceCode: string, transpiledCode: string): string {
+//     let ret = "";
+//     // let lastDestLine
+//     for (const e of entries) {
+//         ret += `${e.sourceStart}; ${e.sourceEnd}; ${e.destinationStart}; ${e.destinationEnd}\n`;
+//     }
+//     return ret;
+// }
+function getLineAndFirstColumnIndex(str: string, idx: number): [number, number] {
+    let lastColumnStart = 0;
+    let currentLine = 0;
+    for (let i = 0; i < idx; ++i) {
+        if (str[i] === "\n") {
+            currentLine++;
+            lastColumnStart = i + 1;
+        }
+    }
+    return [currentLine, lastColumnStart];
+}
+function generateLineMapFile(entries: LineMapEntry[], sourceCode: string, transpiledCode: string): string {
+    const lines: string[][] = [];
+    // let lastEmittedLine = 0;
+    // let lastSourceLine = 0;
     for (const e of entries) {
-        ret += `${e.sourceStart}; ${e.sourceEnd}; ${e.destinationStart}; ${e.destinationEnd}\n`;
+
+        const [sourceLine, sourceFirstColumn] = getLineAndFirstColumnIndex(sourceCode, e.sourceStart);
+        const [destLine, destFirstColumn] = getLineAndFirstColumnIndex(transpiledCode, e.destinationStart);
+        if (!lines[destLine]) {
+            lines[destLine] = [];
+        }
+        lines[destLine].push
+        (`${e.destinationStart} ${sourceLine} ${e.sourceStart}, ${destLine} `);
+
+        // for (let i = e.destinationStart; i < e.destinationEnd; ++i) {
+        //     if (transpiledCode[i] === "\n") {
+        //         ret += `${e.sourceStart}; ${e.sourceEnd}; ${e.destinationStart}; ${e.destinationEnd}\n`;
+        //         lastEmittedLine++;
+        //         lastEmittedColumn = 0;
+        //     }
+        // }
+    }
+    let ret = "";
+    for (const line of lines) {
+        if (line) {
+            for (const segment of line) {
+                ret += segment + ", ";
+            }
+        }
+        ret += ";\n";
     }
     return ret;
 }
@@ -115,7 +160,7 @@ function emitFilesAndReportErrors(program: ts.Program): number {
                 // Transpile AST
                 const transpiler = createTranspiler(checker, options, sourceFile);
                 const lua = transpiler.transpileSourceFile();
-                const sourceMap = generateLineMapFile(transpiler.sourceMap);
+                const sourceMap = generateLineMapFile(transpiler.sourceMap, sourceFile.text, lua);
                 let outPath = sourceFile.fileName;
                 if (options.outDir !== options.rootDir) {
                     const relativeSourcePath = path.resolve(sourceFile.fileName)
